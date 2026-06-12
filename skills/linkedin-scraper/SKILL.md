@@ -273,6 +273,7 @@ Idempotent: skips if `_essence` is already set unless `--regenerate` is passed.
 | 5 | Profile not found / private | listed under `failed[]` | Continue with the rest; mention failures |
 | 6 | `ANTHROPIC_API_KEY` missing | polish + essence print setup hint, exit 0; pipeline continues | Tell user to set the key, then `polish_post.py` + `essence_profile.py` + re-render |
 | 7 | One post fails to polish | listed in polish output `failed[]`; others still polished | Re-run later; idempotent skip protects already-polished posts |
+| 8 | LLM provider error mid-run (e.g. Anthropic HTTP 400 "credit balance too low", or a transient network error) | the affected post/step records the error in its `failed[]` entry or `reason` field and the pipeline continues (exit 0); posts render with raw text, no `_<handle> themes.md`, no essence folder-rename | Read the per-step `reason`/`failed[]` — not just `ok` (which reflects process exit, not work success). Fix the provider issue, then re-run `polish_post.py` + `themes_profile.py` + `essence_profile.py` (idempotent) + re-render |
 
 ## Pricing
 

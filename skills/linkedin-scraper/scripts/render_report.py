@@ -435,15 +435,18 @@ def frontmatter_summary(
 
 # ---------- body renderers --------------------------------------------------------------------
 
-# Reaction-type → glyph mapping for the byline. LinkedIn types observed in test data:
-# LIKE, EMPATHY, APPRECIATION, INTEREST, PRAISE, FUNNY (additional values map to a generic 👍).
+# Reaction-type → glyph mapping for the byline. LinkedIn reaction types (harvestapi names):
+# LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT, MAYBE. The funny reaction
+# comes back as ENTERTAINMENT (not FUNNY) from this actor. An unmapped type falls back to its
+# capitalized name (never a bare separator) so the byline can't render a glyph-less "· · N".
 REACTION_GLYPH = {
     "LIKE": "👍",
     "EMPATHY": "🫶",
     "APPRECIATION": "👏",
     "INTEREST": "💡",
     "PRAISE": "🎉",
-    "FUNNY": "😄",
+    "ENTERTAINMENT": "😂",
+    "FUNNY": "😂",
     "MAYBE": "🤔",
 }
 
@@ -462,8 +465,12 @@ def reaction_breakdown_line(post: dict) -> str:
         count = r.get("count")
         if count is None:
             continue
-        glyph = REACTION_GLYPH.get(rtype, "·")
-        parts.append(f"{glyph} {fmt_int(count)}")
+        glyph = REACTION_GLYPH.get(rtype)
+        if glyph:
+            parts.append(f"{glyph} {fmt_int(count)}")
+        elif rtype:
+            # Unknown type: show its name rather than a bare separator (avoids "· · N").
+            parts.append(f"{rtype.title()} {fmt_int(count)}")
     return " · ".join(parts)
 
 
