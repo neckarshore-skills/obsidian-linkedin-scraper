@@ -13,7 +13,9 @@ cues, Posting strategy.
 Cost ~$0.04–0.07 per profile (Sonnet 4.6, system prompt cached). One call per profile.
 Idempotent: skips if `_themes_md` is already set unless `--regenerate` is passed.
 
-No-ops gracefully if `ANTHROPIC_API_KEY` isn't set.
+No-ops gracefully if the configured LLM provider is unconfigured. Default provider: Anthropic
+(ANTHROPIC_API_KEY). Fully local: SOCIAL_LLM_PROVIDER=ollama + SOCIAL_LLM_MODEL=<pulled model>
+— see _social_common/llm_client.py for the full env contract.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _social_common.tokens import get_anthropic_key, print_anthropic_setup_hint
+from _social_common.llm_client import complete, describe_target
 DEFAULT_MODEL = "claude-sonnet-4-6"
 MAX_OUTPUT_TOKENS = 2500
 PER_POST_CONTENT_CHARS = 600  # truncate each polished content this far for the input bundle
@@ -98,7 +100,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Anthropic model ID (default: {DEFAULT_MODEL}).",
+        help=(
+            f"Model ID for the default anthropic provider (default: {DEFAULT_MODEL}). "
+            "Any provider's model can also be set via SOCIAL_LLM_MODEL; "
+            "switch providers via SOCIAL_LLM_PROVIDER (anthropic | ollama)."
+        ),
     )
     p.add_argument(
         "--regenerate",
@@ -206,48 +212,31 @@ def main() -> int:
         print(json.dumps({"themes": None, "reason": "too_few_posts", "loaded": len(posts)}))
         return 0
 
-    api_key = get_anthropic_key()
-    if not api_key:
-        sys.stderr.write(
-            "INFO: ANTHROPIC_API_KEY not set — skipping themes synthesis.\n"
-            "Setup:\n"
-            "  1. Get a key at https://console.anthropic.com/settings/keys\n"
-            "  2. Add to ~/.zshrc:  export ANTHROPIC_API_KEY='sk-ant-...'\n"
-            "  3. Reload your shell:  source ~/.zshrc\n"
-        )
-        print(json.dumps({"themes": None, "reason": "no_api_key"}))
-        return 0
-
-    try:
-        from anthropic import Anthropic
-    except ImportError:
-        sys.stderr.write("ERROR: 'anthropic' package not installed. Run pip install -r requirements.txt\n")
-        return 2
-
     user_message, used_count = build_user_message(envelope)
     if used_count == 0:
         sys.stderr.write("WARN: no posts had renderable content — nothing to synthesize\n")
         print(json.dumps({"themes": None, "reason": "no_renderable_content"}))
         return 0
 
-    client = Anthropic(api_key=api_key)
-    sys.stderr.write(f"INFO: synthesizing themes via {args.model} (using {used_count} post(s))\n")
+    target = describe_target(args.model)
+    sys.stderr.write(f"INFO: synthesizing themes via {target} (using {used_count} post(s))\n")
     try:
-        msg = client.messages.create(
-            model=args.model,
+        raw = complete(
+            SYSTEM_PROMPT,
+            user_message,
+            default_model=args.model,
             max_tokens=MAX_OUTPUT_TOKENS,
-            system=[
-                {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
-            ],
-            messages=[{"role": "user", "content": user_message}],
         )
     except Exception as exc:
         sys.stderr.write(f"ERROR: themes call failed: {exc}\n")
         print(json.dumps({"themes": None, "reason": "api_error", "detail": str(exc)[:200]}))
         return 0
 
-    text_chunks = [block.text for block in msg.content if getattr(block, "type", None) == "text"]
-    raw = " ".join(text_chunks).strip()
+    if raw is None:
+        sys.stderr.write("INFO: LLM provider unconfigured — skipping themes synthesis.\n")
+        print(json.dumps({"themes": None, "reason": "llm_unconfigured"}))
+        return 0
+    raw = raw.strip()
 
     # The model returns Markdown directly. Defensively strip an opening code-fence or any
     # leading commentary before the first `## ` heading.
@@ -270,7 +259,7 @@ def main() -> int:
         return 0
 
     envelope["_themes_md"] = body
-    envelope["_themes_model"] = args.model
+    envelope["_themes_model"] = target
     envelope["_themes_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     envelope["_themes_posts_used"] = used_count
 
@@ -283,7 +272,7 @@ def main() -> int:
                 "themes": "ok",
                 "regenerated": True,
                 "posts_used": used_count,
-                "model": args.model,
+                "model": target,
                 "body_chars": len(body),
             },
             ensure_ascii=False,

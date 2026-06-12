@@ -9,6 +9,7 @@ copy-pasted code per skill and ensures formatting fixes ripple to all platforms 
 | Module | Exports |
 |---|---|
 | `tokens.py` | `get_apify_token()` (exits 2 on miss), `get_anthropic_key()` (returns Optional), `print_anthropic_setup_hint()` |
+| `llm_client.py` | `complete()`, `describe_target()`, `resolve_provider()`, `resolve_model()`, `LLMConfigError` — provider-agnostic LLM completion seam (Anthropic \| Ollama). **Sanctioned stdlib-rule exception** (see rule 4 + anti-pattern note): lazy `requests`/`anthropic` imports, unit-tested in `test_llm_client.py`. |
 | `llm_helpers.py` | `extract_json_object(text)` — defensive parser for LLM JSON output |
 | `render_helpers.py` | `fmt_int`, `fmt_int_yaml_str`, `yaml_quote`, `md_escape_pipe`, `url_encode_link`, `content_preview`, `sanitize_tag`, `slugify_for_filename`, `truncate_at_word` |
 | `timestamps.py` | `fmt_property_ts`, `fmt_batch_log_ts` (UTC + Berlin), `fmt_date_iso`, `derive_scrape_timestamp`, `read_existing_created`, `resolve_timestamps` |
@@ -101,8 +102,12 @@ and one edge-case assertion. When adding a new helper, extend `test_smoke.py` fi
    parameter; tokens hints don't mention IG / LinkedIn / X.
 3. **Byte-identical output** — every helper here was extracted verbatim from the existing
    skills. Any behavior change must regress-test against the backed-up reference renders.
-4. **No new dependencies** — stdlib only (`re`, `urllib.parse`, `datetime`, `json`, `pathlib`).
-   Skills still install `requests` + `anthropic` for their own scripts.
+4. **No new dependencies — stdlib only, with one sanctioned exception** (`re`, `urllib.parse`,
+   `datetime`, `json`, `pathlib`). Skills still install `requests` + `anthropic` for their own
+   scripts. The one exception is `llm_client.py` (the provider-agnostic LLM seam): its
+   `requests`/`anthropic` imports are **lazy** (inside the transport functions — the module
+   itself stays stdlib-importable), so `import _social_common` never requires a third-party
+   package. Its pure logic is unit-tested in `test_llm_client.py`.
 
 ## Versioning
 
@@ -138,7 +143,7 @@ If you find code duplicated across 2+ skills, move it here. Rules:
 | **Engagement-score formula** | LinkedIn weights shares 3×, IG weights nothing extra, X weights retweets+quotes 2×. A shared scorer would force a config blob per platform — more code than just keeping the formula local. |
 | **`BATCH_LOG_HEADER` template** | Per-platform YAML frontmatter (different `tags`, different `source`) and per-platform table columns. The structure isn't shared, only the idea of "append-only run log" is. |
 | **Field accessors that touch one platform's schema** | E.g. X's `post_text(post)`, `post_id(post)`, `quoted_tweet(post)`. These walk through the actor's specific JSON shape. If 2+ skills end up with structurally identical accessors, that's the moment to revisit — not before. |
-| **Helpers that depend on a `requests` / `anthropic` import** | `_social_common` is stdlib-only by rule 4. Anything that hits the network or calls an LLM lives in the per-skill scripts that already install those deps. |
+| **Helpers that depend on a `requests` / `anthropic` import** | `_social_common` is stdlib-only by rule 4. Anything that hits the network or calls an LLM lives in the per-skill scripts that already install those deps. **One sanctioned exception:** `llm_client.py`, the provider-agnostic completion seam — its imports are lazy (module stays stdlib-importable), it is unit-tested, and the provider-call shape was genuinely duplicated 3×. No further network/LLM code qualifies. |
 
 The driving principle: **abstract on duplication you've already seen, not duplication you
 imagine you'll see**. Three identical lines is fine; three near-identical lines with platform
