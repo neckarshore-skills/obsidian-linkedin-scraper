@@ -119,14 +119,15 @@ def normalize_handle(raw: str) -> tuple[str, str] | None:
 
     kind = "in"
     m = re.match(
-        r"^(?:https?://)?(?:[a-z]+\.)?linkedin\.com/(in|company|school|pub)/([^/?#]+)/?",
+        r"^(?:https?://)?(?:[a-z]+\.)?linkedin\.com/(in|company|school|pub|showcase)/([^/?#]+)/?",
         s,
         flags=re.IGNORECASE,
     )
     if m:
         url_kind = m.group(1).lower()
-        # `pub` is a legacy redirect target for `in`; treat as personal.
-        kind = "company" if url_kind == "company" else "in"
+        # `pub` is a legacy redirect target for `in` → personal. `company` and `showcase`
+        # (a company's product sub-page) keep their own path segment; everything else is personal.
+        kind = url_kind if url_kind in ("company", "showcase") else "in"
         s = m.group(2)
     else:
         s = s.lstrip("@").strip("/")
@@ -239,7 +240,7 @@ def slug_from_item(item: dict) -> str | None:
                 candidates.append(val)
     for cand in candidates:
         m = re.search(
-            r"linkedin\.com/(?:in|company|school|pub)/([^/?#]+)/?",
+            r"linkedin\.com/(?:in|company|school|pub|showcase)/([^/?#]+)/?",
             cand,
             flags=re.IGNORECASE,
         )
@@ -472,8 +473,12 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
+        other_slugs = sorted({s for s in (slug_from_item(it) for it in unmatched) if s})
+        origin = f" (from: {', '.join(other_slugs)})" if other_slugs else ""
         sys.stderr.write(
-            f"WARN: {len(unmatched)} item(s) could not be mapped to a requested handle. "
+            f"WARN: {len(unmatched)} item(s) could not be mapped to a requested handle"
+            f"{origin} — these belong to a different LinkedIn entity (e.g. a company's "
+            f"/showcase/ sub-page). Scrape that handle directly to capture them. "
             f"Saved to {unmatched_path} for inspection.\n"
         )
 
