@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r skills/linkedin-scraper/requirements.txt
+      - name: Compile-check all skill scripts (syntax gate)
+        run: python -m py_compile skills/linkedin-scraper/scripts/*.py
+      - name: LLM client seam tests
+        run: python skills/linkedin-scraper/_social_common/test_llm_client.py
+      - name: Smoke assertions
+        run: python skills/linkedin-scraper/_social_common/test_smoke.py
