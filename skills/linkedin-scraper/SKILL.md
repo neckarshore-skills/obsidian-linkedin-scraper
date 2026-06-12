@@ -47,19 +47,36 @@ permissions must use the 17-char hex ID** (`A3cAPGpwBEG8RJwse` for
 exact token config. The same token works for the Instagram scraper if you already have it set;
 just add this LinkedIn actor's hex to the existing token's resource permissions.
 
-### Anthropic polish + themes + essence (auto-chained after scrape)
+### LLM provider for polish + themes + essence (auto-chained after scrape)
+
+The polish, themes, and essence steps run against a configurable LLM provider. Default is
+Anthropic:
 
 ```bash
 # Add to ~/.zshrc, then `source ~/.zshrc`
 export ANTHROPIC_API_KEY='sk-ant-...'
 ```
 
-Token at <https://console.anthropic.com/settings/keys>. If the key is missing, all three
-LLM-driven steps (polish, themes, essence) no-op with a setup hint and the pipeline continues
-— posts then render with the raw post text in `## Content`, no `_<handle> themes.md` file is
-written, and the folder stays on `<handle>/` instead of `<handle> — <essence>/`. Default
-models: `claude-haiku-4-5-20251001` for polish + essence; `claude-sonnet-4-6` for themes
-(Sonnet handles the cross-post synthesis better).
+Token at <https://console.anthropic.com/settings/keys>. Default models:
+`claude-haiku-4-5-20251001` for polish + essence; `claude-sonnet-4-6` for themes (Sonnet
+handles the cross-post synthesis better).
+
+Fully local alternative via [Ollama](https://ollama.com) (no API key, no per-call cost):
+
+```bash
+export SOCIAL_LLM_PROVIDER=ollama
+export SOCIAL_LLM_MODEL='qwen2.5:7b'   # any pulled model; `ollama list` shows what you have
+# Optional: export OLLAMA_HOST='http://localhost:11434'  (this is the default)
+```
+
+Local 7B models take ~20-60s per call on Apple Silicon (vs. ~1s on Anthropic). The full env
+contract lives in `_social_common/llm_client.py`.
+
+If the selected provider is unconfigured (no `ANTHROPIC_API_KEY`, or `SOCIAL_LLM_PROVIDER=ollama`
+with `SOCIAL_LLM_MODEL` unset), all three LLM-driven steps no-op with a setup hint and the
+pipeline continues — posts then render with the raw post text in `## Content`, no
+`_<handle> themes.md` file is written, and the folder stays on `<handle>/` instead of
+`<handle> — <essence>/`.
 
 ### Skill venv
 

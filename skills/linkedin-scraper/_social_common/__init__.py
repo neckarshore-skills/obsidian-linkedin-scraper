@@ -16,6 +16,13 @@ Both forms are stable. `__all__` below is the canonical list.
 
 from _social_common.cleanup import cleanup_old_post_files
 from _social_common.folder_rename import rename_folder_with_essence
+from _social_common.llm_client import (
+    LLMConfigError,
+    complete,
+    describe_target,
+    resolve_model,
+    resolve_provider,
+)
 from _social_common.llm_helpers import extract_json_object
 from _social_common.render_helpers import (
     content_preview,
@@ -43,9 +50,12 @@ from _social_common.tokens import (
 )
 
 __all__ = [
+    "LLMConfigError",
     "cleanup_old_post_files",
+    "complete",
     "content_preview",
     "derive_scrape_timestamp",
+    "describe_target",
     "extract_json_object",
     "fmt_batch_log_ts",
     "fmt_date_iso",
@@ -58,6 +68,8 @@ __all__ = [
     "print_anthropic_setup_hint",
     "read_existing_created",
     "rename_folder_with_essence",
+    "resolve_model",
+    "resolve_provider",
     "resolve_timestamps",
     "sanitize_tag",
     "slugify_for_filename",

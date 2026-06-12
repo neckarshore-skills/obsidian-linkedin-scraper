@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Polish LinkedIn post text via the Anthropic Claude API.
+"""Polish LinkedIn post text via the configured LLM provider (default: Anthropic).
 
 For every post in a scraped overview.json (envelope shape from `scrape_profile.py`), make ONE
-Haiku call that returns a JSON object with three fields:
+LLM call that returns a JSON object with three fields:
 
   - `description` — third-person, neutral, factual, ≤120 chars. Used in YAML Properties.
   - `content`     — neutral Markdown briefing of the substance. Strips LinkedIn-isms (the
@@ -16,16 +16,17 @@ Pricing reference: Haiku 4.5 input ~$1/MTok, output ~$5/MTok. With prompt cachin
 system instruction, per-post ≈ $0.002 ($0.05 for a 25-post profile).
 
 Setup:
-  ANTHROPIC_API_KEY in env. Get one at https://console.anthropic.com/settings/keys.
-  pip install anthropic  (already pinned in requirements.txt)
+  Default provider: ANTHROPIC_API_KEY in env (https://console.anthropic.com/settings/keys).
+  Fully local: SOCIAL_LLM_PROVIDER=ollama + SOCIAL_LLM_MODEL=<pulled model> — see
+  _social_common/llm_client.py for the full env contract.
 
 Usage:
   polish_post.py --input <overview.json>                       # default: claude-haiku-4-5-20251001
   polish_post.py --input <overview.json> --no-skip-existing    # re-polish even if fields exist
   polish_post.py --input <overview.json> --model claude-sonnet-4-6   # use a different model
 
-The script no-ops gracefully if `ANTHROPIC_API_KEY` isn't set — prints a short setup hint and
-exits 0 so it can be safely chained from `scrape_profile.py`.
+The script no-ops gracefully if the configured provider is unconfigured — prints a short
+setup hint and exits 0 so it can be safely chained from `scrape_profile.py`.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _social_common.tokens import get_anthropic_key, print_anthropic_setup_hint
+from _social_common.llm_client import complete, describe_target
 from _social_common.llm_helpers import extract_json_object
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_DESCRIPTION_CHARS = 120
@@ -130,7 +131,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Anthropic model ID (default: {DEFAULT_MODEL}).",
+        help=(
+            f"Model ID for the default anthropic provider (default: {DEFAULT_MODEL}). "
+            "Any provider's model can also be set via SOCIAL_LLM_MODEL; "
+            "switch providers via SOCIAL_LLM_PROVIDER (anthropic | ollama)."
+        ),
     )
     p.add_argument(
         "--skip-existing",
@@ -161,27 +166,6 @@ def short_id(post: dict, fallback_idx: int) -> str:
 def main() -> int:
     args = parse_args()
 
-    api_key = get_anthropic_key()
-    if not api_key:
-        sys.stderr.write(
-            "INFO: ANTHROPIC_API_KEY not set — skipping post-polish step.\n"
-            "Setup:\n"
-            "  1. Get a key at https://console.anthropic.com/settings/keys\n"
-            "  2. Add to ~/.zshrc:  export ANTHROPIC_API_KEY='sk-ant-...'\n"
-            "  3. Reload your shell:  source ~/.zshrc\n"
-        )
-        print(json.dumps({"polished": 0, "skipped": 0, "reason": "no_api_key"}))
-        return 0
-
-    try:
-        from anthropic import Anthropic
-    except ImportError:
-        sys.stderr.write(
-            "ERROR: 'anthropic' package not installed. Run:\n"
-            "  pip install -r " + str(Path(__file__).parent.parent / "requirements.txt") + "\n"
-        )
-        return 2
-
     if not args.input.exists():
         sys.stderr.write(f"ERROR: input file not found: {args.input}\n")
         return 2
@@ -210,13 +194,12 @@ def main() -> int:
         print(json.dumps({"polished": 0, "skipped": len(posts), "reason": "nothing_to_do"}))
         return 0
 
+    target = describe_target(args.model)
     sys.stderr.write(
-        f"INFO: polishing {len(candidates)} post(s) via {args.model}"
+        f"INFO: polishing {len(candidates)} post(s) via {target}"
         + (f" (skipped {skipped_short} too-short post(s))" if skipped_short else "")
         + "\n"
     )
-
-    client = Anthropic(api_key=api_key)
 
     polished_count = 0
     failed: list[dict] = []
@@ -230,27 +213,23 @@ def main() -> int:
 
         sys.stderr.write(f"  [{n}/{len(candidates)}] {sid}: polishing ...\n")
         try:
-            msg = client.messages.create(
-                model=args.model,
+            raw = complete(
+                SYSTEM_PROMPT,
+                f"LinkedIn post:\n\n{prompt_input}",
+                default_model=args.model,
                 max_tokens=2000,
-                system=[
-                    {
-                        "type": "text",
-                        "text": SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[
-                    {"role": "user", "content": f"LinkedIn post:\n\n{prompt_input}"}
-                ],
+                json_mode=True,
             )
         except Exception as exc:
             sys.stderr.write(f"    ERROR: {exc}\n")
             failed.append({"id": sid, "reason": str(exc)[:200]})
             continue
 
-        text_chunks = [block.text for block in msg.content if getattr(block, "type", None) == "text"]
-        raw = " ".join(text_chunks).strip()
+        if raw is None:
+            # Provider unconfigured — complete() already printed the setup hint once.
+            print(json.dumps({"polished": polished_count, "skipped": 0, "reason": "llm_unconfigured"}))
+            return 0
+
         parsed = extract_json_object(raw)
 
         if not isinstance(parsed, dict):
@@ -270,10 +249,10 @@ def main() -> int:
             continue
 
         post["description_polished"] = truncate_description(description)
-        post["description_polished_model"] = args.model
+        post["description_polished_model"] = target
         post["description_polished_at"] = polished_at
         post["content_polished"] = polished_content
-        post["content_polished_model"] = args.model
+        post["content_polished_model"] = target
         post["content_polished_at"] = polished_at
         post["content_tags"] = tags
         polished_count += 1
@@ -288,7 +267,7 @@ def main() -> int:
                 "skipped_too_short": skipped_short,
                 "skipped_existing_or_empty": len(posts) - len(candidates) - skipped_short,
                 "failed": failed,
-                "model": args.model,
+                "model": target,
             },
             ensure_ascii=False,
             indent=2,

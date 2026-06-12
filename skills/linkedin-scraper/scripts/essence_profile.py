@@ -14,7 +14,9 @@ Usage:
   essence_profile.py --input <overview.json> --regenerate     # force a fresh essence
   essence_profile.py --input <overview.json> --model <id>     # override model
 
-No-ops gracefully if `ANTHROPIC_API_KEY` isn't set — same shape as polish_post.py.
+No-ops gracefully if the configured LLM provider is unconfigured — same shape as polish_post.py.
+Default provider: Anthropic (ANTHROPIC_API_KEY). Fully local: SOCIAL_LLM_PROVIDER=ollama +
+SOCIAL_LLM_MODEL=<pulled model> — see _social_common/llm_client.py for the env contract.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _social_common.tokens import get_anthropic_key, print_anthropic_setup_hint
+from _social_common.llm_client import complete, describe_target
 from _social_common.llm_helpers import extract_json_object
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_ESSENCE_CHARS = 60
@@ -75,7 +77,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Anthropic model ID (default: {DEFAULT_MODEL}).",
+        help=(
+            f"Model ID for the default anthropic provider (default: {DEFAULT_MODEL}). "
+            "Any provider's model can also be set via SOCIAL_LLM_MODEL; "
+            "switch providers via SOCIAL_LLM_PROVIDER (anthropic | ollama)."
+        ),
     )
     p.add_argument(
         "--regenerate",
@@ -157,44 +163,28 @@ def main() -> int:
         print(json.dumps({"essence": envelope["_essence"], "regenerated": False}, ensure_ascii=False))
         return 0
 
-    api_key = get_anthropic_key()
-    if not api_key:
-        sys.stderr.write(
-            "INFO: ANTHROPIC_API_KEY not set — skipping essence generation.\n"
-            "Setup:\n"
-            "  1. Get a key at https://console.anthropic.com/settings/keys\n"
-            "  2. Add to ~/.zshrc:  export ANTHROPIC_API_KEY='sk-ant-...'\n"
-            "  3. Reload your shell:  source ~/.zshrc\n"
-        )
-        print(json.dumps({"essence": None, "reason": "no_api_key"}))
-        return 0
-
-    try:
-        from anthropic import Anthropic
-    except ImportError:
-        sys.stderr.write("ERROR: 'anthropic' package not installed. Run pip install -r requirements.txt\n")
-        return 2
-
     user_message = build_user_message(envelope)
 
-    client = Anthropic(api_key=api_key)
-    sys.stderr.write(f"INFO: generating essence via {args.model}\n")
+    target = describe_target(args.model)
+    sys.stderr.write(f"INFO: generating essence via {target}\n")
     try:
-        msg = client.messages.create(
-            model=args.model,
+        raw = complete(
+            SYSTEM_PROMPT,
+            user_message,
+            default_model=args.model,
             max_tokens=200,
-            system=[
-                {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
-            ],
-            messages=[{"role": "user", "content": user_message}],
+            json_mode=True,
         )
     except Exception as exc:
         sys.stderr.write(f"ERROR: essence call failed: {exc}\n")
         print(json.dumps({"essence": None, "reason": "api_error", "detail": str(exc)[:200]}))
         return 0
 
-    text_chunks = [block.text for block in msg.content if getattr(block, "type", None) == "text"]
-    raw = " ".join(text_chunks).strip()
+    if raw is None:
+        sys.stderr.write("INFO: LLM provider unconfigured — skipping essence generation.\n")
+        print(json.dumps({"essence": None, "reason": "llm_unconfigured"}))
+        return 0
+
     parsed = extract_json_object(raw)
 
     if not isinstance(parsed, dict) or not (parsed.get("essence") or "").strip():
@@ -208,7 +198,7 @@ def main() -> int:
         return 0
 
     envelope["_essence"] = essence
-    envelope["_essence_model"] = args.model
+    envelope["_essence_model"] = target
     envelope["_essence_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     args.input.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
